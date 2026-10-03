@@ -1,21 +1,22 @@
 # Laravel Ranker ⚡
 
-[![Latest Version](https://img.shields.io/packagist/v/hwsc/laravel-ranker.svg?style=flat-square)](https://packagist.org/packages/hwsc/laravel-ranker)
-[![Total Downloads](https://img.shields.io/packagist/dt/hwsc/laravel-ranker.svg?style=flat-square)](https://packagist.org/packages/hwsc/laravel-ranker)
+[![Latest Version](https://img.shields.io/packagist/v/debug404/laravel-ranker.svg?style=flat-square)](https://packagist.org/packages/debug404/laravel-ranker)
+[![Total Downloads](https://img.shields.io/packagist/dt/debug404/laravel-ranker.svg?style=flat-square)](https://packagist.org/packages/debug404/laravel-ranker)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
 
-A high-performance, developer-friendly drag-and-drop ordering and ranking package for Laravel Eloquent models.
+A high-performance, developer-friendly drag-and-drop ordering, ranking, and Kanban management package for Laravel Eloquent models.
 
 ---
 
 ## ✨ Features
 
-- 🚀 **High Performance**: Batch updates reordering sequences using a single optimized `UPDATE ... CASE WHEN` SQL query.
-- 🎯 **Seamless Eloquent Integration**: Automatically assigns sequential order indices on model creation.
-- 📂 **Multi-Tenancy & Grouping**: Group sequences per category, user, project, or workspace using `group_by`.
-- 🔄 **Directional Helpers**: Built-in methods to `moveOrderUp()`, `moveOrderDown()`, `moveToStart()`, `moveToEnd()`, and `swapOrderWith()`.
+- 🚀 **High Performance Batching**: Updates complete reordering sequences in a single atomic `UPDATE ... CASE WHEN` SQL query.
+- 🗂️ **Cross-Group & Kanban Boards**: Move records across columns/categories (`moveToGroup()`) and automatically re-index both origin and target partitions.
+- 🎯 **Seamless Eloquent Auto-Ordering**: Automatically calculates and assigns sequence numbers upon model creation.
+- ⚡ **Gap Normalization & CLI Repair**: Eliminate fragmentation gaps (e.g. `1, 5, 9` ➔ `1, 2, 3`) via `Model::normalizeOrder()`, `normalize_on_delete`, and `php artisan ranker:normalize`.
+- 📢 **Dedicated Eloquent Events**: Dispatches `Ranker\Events\OrderChanged` and `Ranker\Events\ItemMoved` for audit logs, webhooks, and cache invalidation.
+- 🔄 **Directional & Positional Helpers**: Built-in `moveOrderUp()`, `moveOrderDown()`, `moveToPosition($pos)`, `moveToStart()`, `moveToEnd()`, and `swapOrderWith()`.
 - 🌐 **Ready-to-use API Endpoint**: Includes `RankerController`, form request validation, and `Route::ranker()` macro.
-- 🛠️ **Universal Frontend Compatibility**: Plug and play with **SortableJS**, **Alpine.js**, **Vue.js**, **React**, or vanilla HTML5 Drag & Drop.
 
 ---
 
@@ -24,7 +25,7 @@ A high-performance, developer-friendly drag-and-drop ordering and ranking packag
 Install the package via Composer:
 
 ```bash
-composer require hwsc/laravel-ranker
+composer require debug404/laravel-ranker
 ```
 
 Publish the package configuration file (optional):
@@ -50,6 +51,9 @@ return [
     // Auto-calculate order on creation
     'sort_when_creating' => true,
 
+    // Auto-close gaps when records are deleted
+    'normalize_on_delete' => false,
+
     // Whitelist of models allowed in universal reorder endpoint
     'allowed_models' => [
         \App\Models\Project::class,
@@ -62,7 +66,7 @@ return [
 
 ## 🚀 Quick Start
 
-### 1. Prepare Database Migration
+### 1. Database Migration
 
 Add an integer column (e.g. `order_column`) to your table:
 
@@ -72,7 +76,7 @@ Schema::table('tasks', function (Blueprint $table) {
 });
 ```
 
-### 2. Prepare Your Eloquent Model
+### 2. Prepare Your Model
 
 Implement `Ranker\Contracts\Sortable` and use the `Ranker\Traits\HasSortableOrder` trait:
 
@@ -87,7 +91,7 @@ class Task extends Model implements Sortable
 {
     use HasSortableOrder;
 
-    protected $fillable = ['title', 'project_id', 'order_column'];
+    protected $fillable = ['title', 'status', 'project_id', 'order_column'];
 
     /**
      * Optional custom configuration per model:
@@ -95,7 +99,8 @@ class Task extends Model implements Sortable
     public array $sortable = [
         'order_column_name' => 'order_column',
         'sort_when_creating' => true,
-        'group_by' => ['project_id'], // Group orders per project
+        'normalize_on_delete' => true,
+        'group_by' => ['project_id', 'status'], // Multi-tenant / Kanban grouping
     ];
 }
 ```
@@ -116,92 +121,97 @@ $tasks = Task::orderedDesc()->get();
 
 ### Batch Reordering (Drag-and-Drop)
 
-Pass an array of primary keys in the newly sorted sequence. Ranker updates all positions in a **single atomic query**:
+Pass an array of primary keys in the newly sorted sequence:
 
 ```php
 use App\Models\Task;
 
-// Order IDs: 10 becomes order 1, 4 becomes order 2, 8 becomes order 3
+// Reorders IDs: 10 becomes order 1, 4 becomes order 2, 8 becomes order 3
 Task::setNewOrder([10, 4, 8]);
-
-// Or specify custom start index:
-Task::setNewOrder([10, 4, 8], startOrder: 0);
 ```
 
-### Individual Position Manipulation
+### 🗂️ Kanban Cross-Column / Cross-Group Moving
+
+Move an item to a different category/status and insert it at a specific position:
+
+```php
+$task = Task::find(12);
+
+// Move from 'todo' to 'in_progress' at position 1 (shifts other in_progress items down)
+$task->moveToGroup(['status' => 'in_progress'], newPosition: 1);
+```
+
+### Position Manipulation & Normalization
 
 ```php
 $task = Task::find(4);
 
-// Swap position with another task
-$task->swapOrderWith($otherTask);
+// Move to exact position (e.g., position 3)
+$task->moveToPosition(3);
 
-// Move one step up or down
+// Directional helpers
 $task->moveOrderUp();
 $task->moveOrderDown();
-
-// Move to the beginning or end of the list
 $task->moveToStart();
 $task->moveToEnd();
+$task->swapOrderWith($otherTask);
+
+// Compact gaps in order sequence (e.g. 1, 4, 9 -> 1, 2, 3)
+Task::normalizeOrder(['project_id' => 5]);
 ```
 
 ---
 
-## 🌐 API & Drag-and-Drop Frontend Integration
+## 🛠️ CLI Management Commands
 
-### Registering the Reorder Route
-
-Add the `Route::ranker()` macro to your `routes/api.php` or `routes/web.php`:
-
-```php
-use Illuminate\Support\Facades\Route;
-
-Route::middleware('auth:sanctum')->group(function () {
-    Route::ranker('tasks/reorder');
-});
-```
-
-### Frontend Example with SortableJS
-
-```html
-<ul id="task-list">
-    <li data-id="1">Task A</li>
-    <li data-id="2">Task B</li>
-    <li data-id="3">Task C</li>
-</ul>
-
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
-<script>
-    const el = document.getElementById('task-list');
-    Sortable.create(el, {
-        animation: 150,
-        onEnd: function () {
-            const itemIds = Array.from(el.children).map(item => item.dataset.id);
-
-            fetch('/api/tasks/reorder', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
-                },
-                body: JSON.stringify({
-                    model: 'App\\Models\\Task',
-                    items: itemIds,
-                }),
-            });
-        }
-    });
-</script>
-```
-
----
-
-## 🧪 Testing
-
-Run test suite via PHPUnit:
+### Normalize Sequence Gaps
+Repair and normalize order gaps across all records or scoped groups:
 
 ```bash
-composer test
+# Normalize global orders for a model
+php artisan ranker:normalize "App\Models\Task"
+
+# Normalize orders partitioned by grouping column
+php artisan ranker:normalize "App\Models\Task" --group=project_id
+```
+
+---
+
+## 📢 Events & Webhooks
+
+Laravel Ranker dispatches events for listening to sequence changes:
+
+| Event | Dispatched When | Payload Properties |
+| :--- | :--- | :--- |
+| `Ranker\Events\OrderChanged` | Batch `setNewOrder()` finishes | `$event->modelClass`, `$event->ids`, `$event->scope` |
+| `Ranker\Events\ItemMoved` | Single item moves or swaps | `$event->model`, `$event->previousPosition`, `$event->newPosition` |
+
+---
+
+## 🌐 API Endpoint Integration
+
+Register the `Route::ranker()` macro in `routes/web.php` or `routes/api.php`:
+
+```php
+Route::ranker('tasks/reorder')->name('tasks.reorder');
+```
+
+### Drag-and-Drop Payload:
+```json
+{
+    "model": "App\\Models\\Task",
+    "items": [4, 1, 9]
+}
+```
+
+### Kanban Cross-Group Move Payload:
+```json
+{
+    "model": "App\\Models\\Task",
+    "items": [4],
+    "target_group": { "status": "done" },
+    "position": 1
+}
 ```
 
 ---

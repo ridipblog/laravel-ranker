@@ -29,4 +29,29 @@ interface Sortable
      * @return Builder
      */
     public function scopeOrdered(Builder $query, string $direction = 'asc'): Builder;
+
+    /**
+     * Normalize gaps in the sort sequence (1, 2, 3...) for the model or scope.
+     *
+     * @param array $scope
+     * @return void
+     */
+    public static function normalizeOrder(array $scope = []): void;
+
+    /**
+     * Move model to another category/group and assign position.
+     *
+     * @param array $attributes
+     * @param int|null $newPosition
+     * @return bool
+     */
+    public function moveToGroup(array $attributes, ?int $newPosition = null): bool;
+
+    /**
+     * Move model to a specific numerical position within its current group.
+     *
+     * @param int $targetPosition
+     * @return bool
+     */
+    public function moveToPosition(int $targetPosition): bool;
 }

@@ -35,6 +35,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Normalize On Delete
+    |--------------------------------------------------------------------------
+    |
+    | When set to true, deleting a record will automatically shift down the order
+    | of all remaining subsequent records in the same group to eliminate gaps.
+    |
+    */
+    'normalize_on_delete' => false,
+
+    /*
+    |--------------------------------------------------------------------------
     | Allowed Models for Global Reorder API Route
     |--------------------------------------------------------------------------
     |

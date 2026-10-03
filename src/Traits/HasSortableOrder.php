@@ -5,6 +5,8 @@ namespace Ranker\Traits;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Ranker\Events\ItemMoved;
+use Ranker\Events\OrderChanged;
 
 trait HasSortableOrder
 {
@@ -21,6 +23,22 @@ trait HasSortableOrder
 
             if ($shouldSort && is_null($model->getAttribute($column))) {
                 $model->setAttribute($column, $model->getHighestOrderNumber() + 1);
+            }
+        });
+
+        static::deleted(function (Model $model) {
+            $shouldNormalize = $model->sortable['normalize_on_delete'] 
+                ?? config('ranker.normalize_on_delete', false);
+
+            if ($shouldNormalize) {
+                $column = $model->determineSortColumnName();
+                $deletedOrder = $model->getAttribute($column);
+
+                if (!is_null($deletedOrder)) {
+                    $model->buildSortScopeQuery()
+                        ->where($column, '>', $deletedOrder)
+                        ->decrement($column);
+                }
             }
         });
     }
@@ -45,12 +63,20 @@ trait HasSortableOrder
     /**
      * Get a query scoped to the current item's group/category if applicable.
      */
-    public function buildSortScopeQuery(): Builder
+    public function buildSortScopeQuery(array $customScope = []): Builder
     {
         $query = static::query();
 
-        foreach ($this->determineGroupingColumns() as $column) {
-            $query->where($column, $this->getAttribute($column));
+        $scopeColumns = !empty($customScope) 
+            ? array_keys($customScope) 
+            : $this->determineGroupingColumns();
+
+        foreach ($scopeColumns as $column) {
+            $value = array_key_exists($column, $customScope)
+                ? $customScope[$column]
+                : $this->getAttribute($column);
+
+            $query->where($column, $value);
         }
 
         return $query;
@@ -59,12 +85,12 @@ trait HasSortableOrder
     /**
      * Get the highest order number currently in the database for this model/group.
      */
-    public function getHighestOrderNumber(): int
+    public function getHighestOrderNumber(array $customScope = []): int
     {
         $column = $this->determineSortColumnName();
         $startOrder = config('ranker.start_order', 1);
 
-        $max = $this->buildSortScopeQuery()->max($column);
+        $max = $this->buildSortScopeQuery($customScope)->max($column);
 
         return is_null($max) ? ($startOrder - 1) : (int) $max;
     }
@@ -91,17 +117,16 @@ trait HasSortableOrder
      * @param array $ids List of model IDs in the new desired sequence
      * @param int $startOrder Starting sequence number
      * @param string|null $primaryKey Column name for the primary key
+     * @param array $scope Optional scope context
      * @return void
      */
-    public static function setNewOrder(array $ids, int $startOrder = 1, ?string $primaryKey = null): void
+    public static function setNewOrder(array $ids, int $startOrder = 1, ?string $primaryKey = null, array $scope = []): void
     {
         if (empty($ids)) {
             return;
         }
 
-        // Re-index array sequentially from 0
         $ids = array_values($ids);
-
         $instance = new static();
         $key = $primaryKey ?? $instance->getKeyName();
         $column = $instance->determineSortColumnName();
@@ -125,6 +150,105 @@ trait HasSortableOrder
             "UPDATE {$table} SET {$column} = CASE {$casesSql} END WHERE {$key} IN ({$placeholders})",
             $params
         );
+
+        event(new OrderChanged(static::class, $ids, $scope));
+    }
+
+    /**
+     * Normalize gaps in the sort sequence (1, 2, 3...) for the model or group.
+     */
+    public static function normalizeOrder(array $scope = []): void
+    {
+        $instance = new static();
+        $key = $instance->getKeyName();
+        $startOrder = config('ranker.start_order', 1);
+
+        $query = $instance->buildSortScopeQuery($scope)->ordered();
+        $ids = $query->pluck($key)->all();
+
+        if (!empty($ids)) {
+            static::setNewOrder($ids, $startOrder, $key, $scope);
+        }
+    }
+
+    /**
+     * Move the model to a specific numerical position within its current group.
+     */
+    public function moveToPosition(int $targetPosition): bool
+    {
+        $column = $this->determineSortColumnName();
+        $currentPosition = (int) $this->getAttribute($column);
+
+        if ($currentPosition === $targetPosition) {
+            return true;
+        }
+
+        return DB::transaction(function () use ($column, $currentPosition, $targetPosition) {
+            if ($targetPosition < $currentPosition) {
+                // Moving up: shift down records in between
+                $this->buildSortScopeQuery()
+                    ->whereBetween($column, [$targetPosition, $currentPosition - 1])
+                    ->increment($column);
+            } else {
+                // Moving down: shift up records in between
+                $this->buildSortScopeQuery()
+                    ->whereBetween($column, [$currentPosition + 1, $targetPosition])
+                    ->decrement($column);
+            }
+
+            $this->setAttribute($column, $targetPosition);
+            $saved = $this->save();
+
+            if ($saved) {
+                event(new ItemMoved($this, $currentPosition, $targetPosition));
+            }
+
+            return $saved;
+        });
+    }
+
+    /**
+     * Move model to another category/group and assign new position (Kanban boards).
+     */
+    public function moveToGroup(array $attributes, ?int $newPosition = null): bool
+    {
+        return DB::transaction(function () use ($attributes, $newPosition) {
+            $column = $this->determineSortColumnName();
+            $oldPosition = (int) $this->getAttribute($column);
+
+            // 1. Shift remaining items in the origin group
+            $this->buildSortScopeQuery()
+                ->where($column, '>', $oldPosition)
+                ->decrement($column);
+
+            // 2. Determine position in the target group
+            $startOrder = config('ranker.start_order', 1);
+            $targetMax = $this->getHighestOrderNumber($attributes);
+
+            if (is_null($newPosition) || $newPosition > ($targetMax + 1)) {
+                $resolvedPosition = $targetMax + 1;
+            } else {
+                $resolvedPosition = max($startOrder, $newPosition);
+                // Shift target group items at and above the new position
+                $this->buildSortScopeQuery($attributes)
+                    ->where($column, '>=', $resolvedPosition)
+                    ->increment($column);
+            }
+
+            // 3. Update model with target group attributes and new order
+            foreach ($attributes as $key => $value) {
+                $this->setAttribute($key, $value);
+            }
+            $this->setAttribute($column, $resolvedPosition);
+
+            $saved = $this->save();
+
+            if ($saved) {
+                event(new ItemMoved($this, $oldPosition, $resolvedPosition));
+            }
+
+            return $saved;
+        });
     }
 
     /**
@@ -140,8 +264,13 @@ trait HasSortableOrder
         $this->setAttribute($column, $otherOrder);
         $other->setAttribute($column, $myOrder);
 
-        return DB::transaction(function () use ($other) {
-            return $this->save() && $other->save();
+        return DB::transaction(function () use ($other, $myOrder, $otherOrder) {
+            $saved = $this->save() && $other->save();
+            if ($saved) {
+                event(new ItemMoved($this, $myOrder, $otherOrder));
+                event(new ItemMoved($other, $otherOrder, $myOrder));
+            }
+            return $saved;
         });
     }
 
@@ -188,15 +317,8 @@ trait HasSortableOrder
      */
     public function moveToStart(): bool
     {
-        $column = $this->determineSortColumnName();
-        $min = $this->buildSortScopeQuery()->min($column);
-
-        if ($this->getAttribute($column) === $min) {
-            return true;
-        }
-
-        $this->setAttribute($column, ($min ?? 1) - 1);
-        return $this->save();
+        $startOrder = config('ranker.start_order', 1);
+        return $this->moveToPosition($startOrder);
     }
 
     /**
@@ -204,14 +326,7 @@ trait HasSortableOrder
      */
     public function moveToEnd(): bool
     {
-        $column = $this->determineSortColumnName();
-        $max = $this->buildSortScopeQuery()->max($column);
-
-        if ($this->getAttribute($column) === $max) {
-            return true;
-        }
-
-        $this->setAttribute($column, ($max ?? 0) + 1);
-        return $this->save();
+        $max = $this->getHighestOrderNumber();
+        return $this->moveToPosition($max);
     }
 }

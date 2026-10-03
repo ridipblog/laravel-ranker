@@ -30,9 +30,28 @@ class RankerController extends Controller
         $items = $request->input('items', []);
         $startOrder = (int) $request->input('start_order', config('ranker.start_order', 1));
         $primaryKey = $request->input('primary_key');
+        $scope = (array) $request->input('scope', []);
+        $targetGroup = $request->input('target_group');
+
+        // Kanban cross-group moving support
+        if ($targetGroup && !empty($items) && $modelClass) {
+            $movedId = $items[0];
+            $modelInstance = $modelClass::find($movedId);
+
+            if ($modelInstance && method_exists($modelInstance, 'moveToGroup')) {
+                $targetPosition = $request->has('position') ? (int) $request->input('position') : null;
+                $modelInstance->moveToGroup((array) $targetGroup, $targetPosition);
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Item moved across groups successfully.',
+                    'item_id' => $movedId,
+                ]);
+            }
+        }
 
         if ($modelClass && method_exists($modelClass, 'setNewOrder')) {
-            $modelClass::setNewOrder($items, $startOrder, $primaryKey);
+            $modelClass::setNewOrder($items, $startOrder, $primaryKey, $scope);
         }
 
         return response()->json([

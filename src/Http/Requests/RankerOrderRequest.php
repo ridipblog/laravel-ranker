@@ -25,6 +25,8 @@ class RankerOrderRequest extends FormRequest
             'items.*' => ['required'],
             'start_order' => ['sometimes', 'integer', 'min:0'],
             'primary_key' => ['sometimes', 'string'],
+            'scope' => ['sometimes', 'array'],
+            'target_group' => ['sometimes', 'array'],
         ];
     }
 }

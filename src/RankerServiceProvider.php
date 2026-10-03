@@ -4,6 +4,7 @@ namespace Ranker;
 
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Ranker\Console\NormalizeOrderCommand;
 use Ranker\Http\Controllers\RankerController;
 use Ranker\Services\RankerManager;
 
@@ -35,6 +36,10 @@ class RankerServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__ . '/../config/ranker.php' => config_path('ranker.php'),
             ], 'ranker-config');
+
+            $this->commands([
+                NormalizeOrderCommand::class,
+            ]);
         }
 
         $this->registerRouteMacros();
