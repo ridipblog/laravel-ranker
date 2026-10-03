@@ -163,4 +163,23 @@ class HasSortableOrderTest extends TestCase
         $this->assertEquals(2, $item2->fresh()->order_column);
         $this->assertEquals(3, $item3->fresh()->order_column);
     }
+
+    /** @test */
+    public function it_handles_soft_deletion_normalization_and_restoration()
+    {
+        $item1 = \Ranker\Tests\Models\SoftDeletedItem::create(['name' => 'Item 1']); // 1
+        $item2 = \Ranker\Tests\Models\SoftDeletedItem::create(['name' => 'Item 2']); // 2
+        $item3 = \Ranker\Tests\Models\SoftDeletedItem::create(['name' => 'Item 3']); // 3
+
+        // Soft delete item2 -> item3 should shift from 3 down to 2
+        $item2->delete();
+
+        $this->assertEquals(1, $item1->fresh()->order_column);
+        $this->assertEquals(2, $item3->fresh()->order_column);
+
+        // Restore item2 -> default 'restore_to' => 'end' puts it at order 3
+        $item2->restore();
+
+        $this->assertEquals(3, $item2->fresh()->order_column);
+    }
 }

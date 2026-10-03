@@ -41,6 +41,35 @@ trait HasSortableOrder
                 }
             }
         });
+
+        if (method_exists(static::class, 'restored')) {
+            static::restored(function (Model $model) {
+                $column = $model->determineSortColumnName();
+                $restoreMode = $model->sortable['restore_to'] 
+                    ?? config('ranker.restore_to', 'end');
+
+                $startOrder = config('ranker.start_order', 1);
+
+                if ($restoreMode === 'start') {
+                    $model->buildSortScopeQuery()
+                        ->where($column, '>=', $startOrder)
+                        ->increment($column);
+                    $model->setAttribute($column, $startOrder);
+                    $model->saveQuietly();
+                } elseif ($restoreMode === 'original' && !is_null($model->getAttribute($column))) {
+                    $origOrder = $model->getAttribute($column);
+                    $model->buildSortScopeQuery()
+                        ->where($column, '>=', $origOrder)
+                        ->increment($column);
+                    $model->saveQuietly();
+                } else {
+                    // 'end' default: place at the end of the active group
+                    $highest = $model->getHighestOrderNumber();
+                    $model->setAttribute($column, $highest + 1);
+                    $model->saveQuietly();
+                }
+            });
+        }
     }
 
     /**

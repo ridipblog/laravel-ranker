@@ -57,5 +57,13 @@ abstract class TestCase extends OrchestraTestCase
             $table->integer('custom_order')->nullable();
             $table->timestamps();
         });
+
+        Schema::create('soft_deleted_items', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->integer('order_column')->nullable();
+            $table->softDeletes();
+            $table->timestamps();
+        });
     }
 }

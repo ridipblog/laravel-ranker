@@ -46,6 +46,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Soft Delete Restore Placement
+    |--------------------------------------------------------------------------
+    |
+    | Determines where a restored soft-deleted record is positioned in the sequence.
+    | Supported options: 'end' (default), 'start', or 'original'.
+    |
+    */
+    'restore_to' => 'end',
+
+    /*
+    |--------------------------------------------------------------------------
     | Allowed Models for Global Reorder API Route
     |--------------------------------------------------------------------------
     |

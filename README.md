@@ -51,8 +51,11 @@ return [
     // Auto-calculate order on creation
     'sort_when_creating' => true,
 
-    // Auto-close gaps when records are deleted
+    // Auto-close gaps when records are deleted (soft or hard)
     'normalize_on_delete' => false,
+
+    // Placement for restored soft-deleted models ('end', 'start', or 'original')
+    'restore_to' => 'end',
 
     // Whitelist of models allowed in universal reorder endpoint
     'allowed_models' => [
